@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>藥品即時偵測 - YOLOv8 ONNX (GitHub Pages 版)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { margin:0; background:black; }
+    video, canvas { position:absolute; top:0; left:0; max-width:100%; height:auto; }
+    #count { position:fixed; top:10px; left:10px; color:white; font-size:24px; z-index:999; }
+    #warn { position:fixed; bottom:10px; left:10px; color:yellow; font-size:14px; z-index:999; }
+  </style>
+</head>
+<body>
+  <video id="video" autoplay playsinline width="640" height="480"></video>
+  <canvas id="canvas" width="640" height="480"></canvas>
+  <div id="count">Total: 0</div>
+  <div id="warn">⚠️ 若相機未啟動，請使用 HTTPS 連線</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+  <script src="onnx-inference.js"></script>
+  <script>
+    const video = document.getElementById('video');
+    navigator.mediaDevices.getUserMedia({ video: true }).then(stream => video.srcObject = stream)
+    .catch(err => alert("🚫 無法存取相機，請檢查 HTTPS 與權限: " + err));
+
+    async function init() {
+      const session = await ort.InferenceSession.create('./best.onnx');
+      console.log('✅ YOLOv8 ONNX 模型載入完成');
+      runYOLO(session, video);
+    }
+    init();
+  </script>
+</body>
+</html>
