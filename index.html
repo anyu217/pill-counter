@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8">
-  <title>藥品即時偵測 - YOLOv8 ONNX (GitHub Pages 版)</title>
+  <title>藥品即時偵測 - YOLOv8 ONNX (Mobile 後相機版)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     body { margin:0; background:black; }
@@ -15,14 +15,21 @@
   <video id="video" autoplay playsinline width="640" height="480"></video>
   <canvas id="canvas" width="640" height="480"></canvas>
   <div id="count">Total: 0</div>
-  <div id="warn">⚠️ 若相機未啟動，請使用 HTTPS 連線</div>
+  <div id="warn">📷 嘗試使用後相機，若失敗將改回前相機</div>
 
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
   <script src="onnx-inference.js"></script>
   <script>
     const video = document.getElementById('video');
-    navigator.mediaDevices.getUserMedia({ video: true }).then(stream => video.srcObject = stream)
-    .catch(err => alert("🚫 無法存取相機，請檢查 HTTPS 與權限: " + err));
+
+    // 嘗試強制後相機
+    navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { exact: "environment" } }
+    }).then(stream => video.srcObject = stream)
+    .catch(err => {
+      console.warn("⚠️ 無法使用後鏡頭，改用預設鏡頭:", err);
+      navigator.mediaDevices.getUserMedia({ video: true }).then(s => video.srcObject = s);
+    });
 
     async function init() {
       const session = await ort.InferenceSession.create('./best.onnx');
