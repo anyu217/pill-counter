@@ -1,42 +1,234 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
-  <meta charset="UTF-8">
-  <title>藥品即時偵測 - YOLOv8 ONNX (Mobile 後相機版)</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <style>
-    body { margin:0; background:black; }
-    video, canvas { position:absolute; top:0; left:0; max-width:100%; height:auto; }
-    #count { position:fixed; top:10px; left:10px; color:white; font-size:24px; z-index:999; }
-    #warn { position:fixed; bottom:10px; left:10px; color:yellow; font-size:14px; z-index:999; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>藥物即時計數器</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #000;
+            color: white;
+            font-family: sans-serif;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        /* 顯示影片串流 (隱藏原始影片，只顯示處理後的 Canvas) */
+        video {
+            display: none;
+        }
+        /* 處理後的畫布 */
+        canvas {
+            width: 100%;
+            max-width: 640px;
+            height: auto;
+            border: 2px solid #444;
+        }
+        .ui-container {
+            position: fixed;
+            bottom: 20px;
+            width: 100%;
+            text-align: center;
+            z-index: 10;
+        }
+        .count-box {
+            background: rgba(0, 255, 0, 0.8);
+            color: black;
+            padding: 15px 30px;
+            border-radius: 30px;
+            font-size: 24px;
+            font-weight: bold;
+            display: inline-block;
+        }
+        #status {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 18px;
+            color: #aaa;
+        }
+        .controls {
+            margin-top: 10px;
+        }
+        input[type="range"] {
+            width: 80%;
+        }
+        label {
+            display: block;
+            font-size: 12px;
+            margin-bottom: 5px;
+        }
+    </style>
 </head>
 <body>
-  <video id="video" autoplay playsinline width="640" height="480"></video>
-  <canvas id="canvas" width="640" height="480"></canvas>
-  <div id="count">Total: 0</div>
-  <div id="warn">📷 嘗試使用後相機，若失敗將改回前相機</div>
 
-  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
-  <script src="onnx-inference.js"></script>
-  <script>
-    const video = document.getElementById('video');
+    <div id="status">正在載入 OpenCV...</div>
 
-    // 嘗試強制後相機
-    navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { exact: "environment" } }
-    }).then(stream => video.srcObject = stream)
-    .catch(err => {
-      console.warn("⚠️ 無法使用後鏡頭，改用預設鏡頭:", err);
-      navigator.mediaDevices.getUserMedia({ video: true }).then(s => video.srcObject = s);
-    });
+    <!-- 隱藏的 Video 元素，用於獲取鏡頭 -->
+    <video id="videoInput" playsinline webkit-playsinline></video>
+    
+    <!-- 顯示處理結果的 Canvas -->
+    <canvas id="canvasOutput"></canvas>
 
-    async function init() {
-      const session = await ort.InferenceSession.create('./best.onnx');
-      console.log('✅ YOLOv8 ONNX 模型載入完成');
-      runYOLO(session, video);
-    }
-    init();
-  </script>
+    <div class="ui-container">
+        <div class="count-box">數量: <span id="countDisplay">0</span></div>
+        
+        <div class="controls">
+            <label>調整敏感度 (二值化閥值): <span id="threshVal">100</span></label>
+            <input type="range" id="thresholdRange" min="0" max="255" value="100">
+        </div>
+    </div>
+
+    <!-- 載入 OpenCV.js -->
+    <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
+
+    <script type="text/javascript">
+        let video = document.getElementById('videoInput');
+        let canvas = document.getElementById('canvasOutput');
+        let ctx = canvas.getContext('2d');
+        let countDisplay = document.getElementById('countDisplay');
+        let statusText = document.getElementById('status');
+        let thresholdRange = document.getElementById('thresholdRange');
+        let threshValDisplay = document.getElementById('threshVal');
+
+        let stream = null;
+        let streaming = false;
+        let thresholdValue = 100;
+
+        // 調整閥值監聽
+        thresholdRange.addEventListener('input', (e) => {
+            thresholdValue = parseInt(e.target.value);
+            threshValDisplay.innerText = thresholdValue;
+        });
+
+        function onOpenCvReady() {
+            statusText.innerHTML = 'OpenCV 載入完成，正在啟動相機...';
+            startCamera();
+        }
+
+        async function startCamera() {
+            try {
+                // 請求後置鏡頭
+                const constraints = {
+                    video: {
+                        facingMode: 'environment',
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    },
+                    audio: false
+                };
+                stream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = stream;
+                video.play();
+                
+                video.onloadedmetadata = () => {
+                    statusText.style.display = 'none';
+                    video.width = video.videoWidth;
+                    video.height = video.videoHeight;
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    streaming = true;
+                    // 開始處理每一幀
+                    processVideo();
+                };
+            } catch (err) {
+                statusText.innerHTML = '無法存取相機: ' + err;
+                console.error(err);
+            }
+        }
+
+        function processVideo() {
+            if (!streaming) return;
+
+            let src = new cv.Mat(video.height, video.width, cv.CV_8UC4);
+            let dst = new cv.Mat(video.height, video.width, cv.CV_8UC1);
+            let gray = new cv.Mat();
+            let cap = new cv.VideoCapture(video);
+
+            const FPS = 30;
+
+            function processFrame() {
+                try {
+                    if (!streaming) {
+                        // 清理記憶體
+                        src.delete(); dst.delete(); gray.delete();
+                        return;
+                    }
+
+                    let begin = Date.now();
+
+                    // 1. 讀取影像
+                    cap.read(src);
+
+                    // 2. 轉為灰階
+                    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+
+                    // 3. 高斯模糊 (減少噪點)
+                    let ksize = new cv.Size(5, 5);
+                    cv.GaussianBlur(gray, gray, ksize, 0, 0, cv.BORDER_DEFAULT);
+
+                    // 4. 二值化 (Threshold) - 這是關鍵，決定什麼是「物體」
+                    // 調整滑桿來適應不同的光線和背景對比
+                    cv.threshold(gray, dst, thresholdValue, 255, cv.THRESH_BINARY);
+
+                    // 5. 尋找輪廓
+                    let contours = new cv.MatVector();
+                    let hierarchy = new cv.Mat();
+                    cv.findContours(dst, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+                    // 6. 過濾與繪製
+                    let pillCount = 0;
+                    
+                    // 為了畫出彩色的框，我們複製一份原始影像來畫圖
+                    let outputDisplay = src.clone();
+
+                    for (let i = 0; i < contours.size(); ++i) {
+                        let cnt = contours.get(i);
+                        let area = cv.contourArea(cnt);
+
+                        // 過濾掉太小的噪點 (例如小於 300 像素面積)
+                        // 根據實際藥丸大小和鏡頭距離，可能需要調整這個數值
+                        if (area > 300) {
+                            pillCount++;
+                            
+                            // 畫出輪廓
+                            let color = new cv.Scalar(0, 255, 0, 255); // 綠色
+                            cv.drawContours(outputDisplay, contours, i, color, 2, cv.LINE_8, hierarchy, 0);
+                            
+                            // 畫出邊框矩形
+                            let rect = cv.boundingRect(cnt);
+                            let point1 = new cv.Point(rect.x, rect.y);
+                            let point2 = new cv.Point(rect.x + rect.width, rect.y + rect.height);
+                            cv.rectangle(outputDisplay, point1, point2, new cv.Scalar(255, 0, 0, 255), 2);
+                        }
+                    }
+
+                    // 更新畫面
+                    cv.imshow('canvasOutput', outputDisplay);
+                    
+                    // 更新計數文字
+                    countDisplay.innerText = pillCount;
+
+                    // 清理迴圈內的記憶體 (非常重要，否則瀏覽器會崩潰)
+                    contours.delete();
+                    hierarchy.delete();
+                    outputDisplay.delete();
+
+                    // 排程下一幀
+                    let delay = 1000/FPS - (Date.now() - begin);
+                    setTimeout(processFrame, delay);
+
+                } catch (err) {
+                    console.error(err);
+                }
+            }
+
+            // 啟動循環
+            setTimeout(processFrame, 0);
+        }
+    </script>
 </body>
 </html>
