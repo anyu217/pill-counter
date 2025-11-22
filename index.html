@@ -3,231 +3,167 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>藥物即時計數器</title>
+    <title>藥物計數器 V2 (抗沾黏版)</title>
     <style>
-        body {
-            margin: 0;
-            background-color: #000;
-            color: white;
-            font-family: sans-serif;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
-        /* 顯示影片串流 (隱藏原始影片，只顯示處理後的 Canvas) */
-        video {
-            display: none;
-        }
-        /* 處理後的畫布 */
-        canvas {
-            width: 100%;
-            max-width: 640px;
-            height: auto;
-            border: 2px solid #444;
-        }
-        .ui-container {
-            position: fixed;
-            bottom: 20px;
-            width: 100%;
-            text-align: center;
-            z-index: 10;
-        }
-        .count-box {
-            background: rgba(0, 255, 0, 0.8);
-            color: black;
-            padding: 15px 30px;
-            border-radius: 30px;
-            font-size: 24px;
-            font-weight: bold;
-            display: inline-block;
-        }
-        #status {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            font-size: 18px;
-            color: #aaa;
-        }
-        .controls {
-            margin-top: 10px;
-        }
-        input[type="range"] {
-            width: 80%;
-        }
-        label {
-            display: block;
-            font-size: 12px;
-            margin-bottom: 5px;
-        }
+        body { margin: 0; background-color: #111; color: white; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; }
+        video { display: none; }
+        canvas { width: 100%; max-width: 640px; border: 1px solid #555; }
+        .ui-container { position: fixed; bottom: 0; width: 100%; background: rgba(0,0,0,0.8); padding: 10px 0; border-top-left-radius: 20px; border-top-right-radius: 20px; }
+        .count-box { font-size: 40px; font-weight: bold; color: #0f0; text-align: center; margin-bottom: 10px; }
+        .control-group { display: flex; justify-content: space-around; margin-bottom: 5px; padding: 0 10px; font-size: 12px; }
+        .control-group div { display: flex; flex-direction: column; align-items: center; width: 45%; }
+        input[type="range"] { width: 100%; margin-top: 5px; }
+        #status { position: absolute; top: 40%; width: 100%; text-align: center; color: #aaa; }
     </style>
 </head>
 <body>
 
-    <div id="status">正在載入 OpenCV...</div>
-
-    <!-- 隱藏的 Video 元素，用於獲取鏡頭 -->
+    <div id="status">系統載入中...</div>
     <video id="videoInput" playsinline webkit-playsinline></video>
-    
-    <!-- 顯示處理結果的 Canvas -->
     <canvas id="canvasOutput"></canvas>
 
     <div class="ui-container">
-        <div class="count-box">數量: <span id="countDisplay">0</span></div>
+        <div class="count-box"><span id="countDisplay">0</span> 顆</div>
         
-        <div class="controls">
-            <label>調整敏感度 (二值化閥值): <span id="threshVal">100</span></label>
-            <input type="range" id="thresholdRange" min="0" max="255" value="100">
+        <div class="control-group">
+            <div>
+                <label>亮度閥值 (Threshold): <span id="threshVal">100</span></label>
+                <input type="range" id="thresholdRange" min="0" max="255" value="100">
+            </div>
+            <div>
+                <label>分離強度 (Erode): <span id="erodeVal">3</span></label>
+                <input type="range" id="erodeRange" min="0" max="15" value="3">
+            </div>
+        </div>
+        <div class="control-group">
+             <div style="width:90%">
+                <label>最大面積過濾 (濾除背景): <span id="maxAreaVal">5000</span></label>
+                <input type="range" id="maxAreaRange" min="1000" max="20000" value="5000">
+            </div>
         </div>
     </div>
 
-    <!-- 載入 OpenCV.js -->
-    <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
+    <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady();"></script>
 
     <script type="text/javascript">
         let video = document.getElementById('videoInput');
         let canvas = document.getElementById('canvasOutput');
-        let ctx = canvas.getContext('2d');
         let countDisplay = document.getElementById('countDisplay');
         let statusText = document.getElementById('status');
-        let thresholdRange = document.getElementById('thresholdRange');
-        let threshValDisplay = document.getElementById('threshVal');
 
-        let stream = null;
-        let streaming = false;
-        let thresholdValue = 100;
+        // UI Controls
+        let threshRange = document.getElementById('thresholdRange');
+        let erodeRange = document.getElementById('erodeRange');
+        let maxAreaRange = document.getElementById('maxAreaRange');
+        
+        let config = {
+            threshold: 100,
+            erodeSize: 3,
+            maxArea: 5000
+        };
 
-        // 調整閥值監聽
-        thresholdRange.addEventListener('input', (e) => {
-            thresholdValue = parseInt(e.target.value);
-            threshValDisplay.innerText = thresholdValue;
-        });
+        // 綁定事件
+        threshRange.oninput = (e) => { config.threshold = parseInt(e.target.value); document.getElementById('threshVal').innerText = config.threshold; };
+        erodeRange.oninput = (e) => { config.erodeSize = parseInt(e.target.value); document.getElementById('erodeVal').innerText = config.erodeSize; };
+        maxAreaRange.oninput = (e) => { config.maxArea = parseInt(e.target.value); document.getElementById('maxAreaVal').innerText = config.maxArea; };
 
         function onOpenCvReady() {
-            statusText.innerHTML = 'OpenCV 載入完成，正在啟動相機...';
+            statusText.innerText = '相機啟動中...';
             startCamera();
         }
 
         async function startCamera() {
             try {
-                // 請求後置鏡頭
-                const constraints = {
-                    video: {
-                        facingMode: 'environment',
-                        width: { ideal: 640 },
-                        height: { ideal: 480 }
-                    },
-                    audio: false
-                };
-                stream = await navigator.mediaDevices.getUserMedia(constraints);
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false
+                });
                 video.srcObject = stream;
                 video.play();
-                
                 video.onloadedmetadata = () => {
                     statusText.style.display = 'none';
-                    video.width = video.videoWidth;
-                    video.height = video.videoHeight;
-                    canvas.width = video.videoWidth;
-                    canvas.height = video.videoHeight;
-                    streaming = true;
-                    // 開始處理每一幀
+                    video.width = video.videoWidth; video.height = video.videoHeight;
+                    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
                     processVideo();
                 };
-            } catch (err) {
-                statusText.innerHTML = '無法存取相機: ' + err;
-                console.error(err);
-            }
+            } catch (err) { statusText.innerText = '相機錯誤: ' + err; }
         }
 
         function processVideo() {
-            if (!streaming) return;
-
             let src = new cv.Mat(video.height, video.width, cv.CV_8UC4);
-            let dst = new cv.Mat(video.height, video.width, cv.CV_8UC1);
             let gray = new cv.Mat();
+            let binary = new cv.Mat();
             let cap = new cv.VideoCapture(video);
+            
+            // 預先分配記憶體給腐蝕操作
+            let M = new cv.Mat(); 
+            let anchor = new cv.Point(-1, -1);
 
             const FPS = 30;
 
-            function processFrame() {
+            function loop() {
                 try {
-                    if (!streaming) {
-                        // 清理記憶體
-                        src.delete(); dst.delete(); gray.delete();
-                        return;
+                    let start = Date.now();
+                    cap.read(src);
+                    
+                    // 1. 灰階與模糊
+                    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+                    cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
+
+                    // 2. 二值化 (Threshold)
+                    cv.threshold(gray, binary, config.threshold, 255, cv.THRESH_BINARY);
+
+                    // 3. 腐蝕 (Erosion) - 這是分開藥丸的關鍵！
+                    // 建立一個矩形結構元素
+                    let kSize = config.erodeSize;
+                    if(kSize > 0) {
+                        let kernel = cv.Mat.ones(kSize, kSize, cv.CV_8U);
+                        cv.erode(binary, binary, kernel, anchor, 1);
+                        kernel.delete(); // 記得釋放
                     }
 
-                    let begin = Date.now();
-
-                    // 1. 讀取影像
-                    cap.read(src);
-
-                    // 2. 轉為灰階
-                    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-
-                    // 3. 高斯模糊 (減少噪點)
-                    let ksize = new cv.Size(5, 5);
-                    cv.GaussianBlur(gray, gray, ksize, 0, 0, cv.BORDER_DEFAULT);
-
-                    // 4. 二值化 (Threshold) - 這是關鍵，決定什麼是「物體」
-                    // 調整滑桿來適應不同的光線和背景對比
-                    cv.threshold(gray, dst, thresholdValue, 255, cv.THRESH_BINARY);
-
-                    // 5. 尋找輪廓
+                    // 4. 尋找輪廓
                     let contours = new cv.MatVector();
                     let hierarchy = new cv.Mat();
-                    cv.findContours(dst, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+                    cv.findContours(binary, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-                    // 6. 過濾與繪製
-                    let pillCount = 0;
-                    
-                    // 為了畫出彩色的框，我們複製一份原始影像來畫圖
-                    let outputDisplay = src.clone();
+                    let count = 0;
+                    let displayMat = src.clone();
 
                     for (let i = 0; i < contours.size(); ++i) {
                         let cnt = contours.get(i);
                         let area = cv.contourArea(cnt);
+                        
+                        // 取得邊框，計算長寬比
+                        let rect = cv.boundingRect(cnt);
+                        let aspectRatio = rect.width / rect.height;
 
-                        // 過濾掉太小的噪點 (例如小於 300 像素面積)
-                        // 根據實際藥丸大小和鏡頭距離，可能需要調整這個數值
-                        if (area > 300) {
-                            pillCount++;
+                        // 過濾條件：
+                        // 1. 面積要大於 100 (濾雜訊)
+                        // 2. 面積要小於設定值 (濾掉背景反光)
+                        // 3. 長寬比要接近 1 (0.5 ~ 2.0)，避免長條形反光被算進去
+                        if (area > 100 && area < config.maxArea && aspectRatio > 0.5 && aspectRatio < 2.0) {
+                            count++;
+                            // 畫綠框
+                            let p1 = new cv.Point(rect.x, rect.y);
+                            let p2 = new cv.Point(rect.x + rect.width, rect.y + rect.height);
+                            cv.rectangle(displayMat, p1, p2, new cv.Scalar(0, 255, 0, 255), 2);
                             
-                            // 畫出輪廓
-                            let color = new cv.Scalar(0, 255, 0, 255); // 綠色
-                            cv.drawContours(outputDisplay, contours, i, color, 2, cv.LINE_8, hierarchy, 0);
-                            
-                            // 畫出邊框矩形
-                            let rect = cv.boundingRect(cnt);
-                            let point1 = new cv.Point(rect.x, rect.y);
-                            let point2 = new cv.Point(rect.x + rect.width, rect.y + rect.height);
-                            cv.rectangle(outputDisplay, point1, point2, new cv.Scalar(255, 0, 0, 255), 2);
+                            // 標示中心點 (選用)
+                            cv.circle(displayMat, new cv.Point(rect.x + rect.width/2, rect.y + rect.height/2), 2, new cv.Scalar(255, 0, 0, 255), 2);
                         }
                     }
 
-                    // 更新畫面
-                    cv.imshow('canvasOutput', outputDisplay);
+                    cv.imshow('canvasOutput', displayMat);
+                    countDisplay.innerText = count;
+
+                    // 記憶體釋放
+                    displayMat.delete(); contours.delete(); hierarchy.delete();
                     
-                    // 更新計數文字
-                    countDisplay.innerText = pillCount;
+                    setTimeout(loop, 1000/FPS - (Date.now() - start));
 
-                    // 清理迴圈內的記憶體 (非常重要，否則瀏覽器會崩潰)
-                    contours.delete();
-                    hierarchy.delete();
-                    outputDisplay.delete();
-
-                    // 排程下一幀
-                    let delay = 1000/FPS - (Date.now() - begin);
-                    setTimeout(processFrame, delay);
-
-                } catch (err) {
-                    console.error(err);
-                }
+                } catch(e) { console.error(e); }
             }
-
-            // 啟動循環
-            setTimeout(processFrame, 0);
+            loop();
         }
     </script>
 </body>
